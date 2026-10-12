@@ -21,4 +21,6 @@ apply_cast_patch() {
 }
 
 apply_cast_patch "$2" "$cast_patch_root/vlc/0001-chromecast-external-webvtt.patch"
+apply_cast_patch "$2" "$cast_patch_root/vlc/0002-chromecast-embedded-text-subtitles.patch"
 apply_cast_patch "$1" "$cast_patch_root/libvlcjni/0001-chromecast-subtitle-bridge.patch"
+apply_cast_patch "$1" "$cast_patch_root/libvlcjni/0002-embedded-cast-subtitle-reader.patch"

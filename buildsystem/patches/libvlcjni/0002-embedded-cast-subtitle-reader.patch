@@ -1,0 +1,89 @@
+diff --git a/libvlc/jni/libvlcjni-media.c b/libvlc/jni/libvlcjni-media.c
+index 8cb696e..4788dfc 100644
+--- a/libvlc/jni/libvlcjni-media.c
++++ b/libvlc/jni/libvlcjni-media.c
+@@ -19,6 +19,7 @@
+  *****************************************************************************/
+ 
+ #include <stdlib.h>
++#include <string.h>
+ #include <pthread.h>
+ #include <unistd.h>
+ 
+@@ -513,6 +514,50 @@ media_track_to_object(JNIEnv *env, libvlc_media_track_t *p_tracks)
+     return jobj;
+ }
+ 
++struct cast_cancel
++{
++    JNIEnv *env;
++    jobject thread;
++    jmethodID interrupted;
++};
++
++static int cast_interrupted(void *opaque)
++{
++    struct cast_cancel *cancel = opaque;
++    return (*cancel->env)->ExceptionCheck(cancel->env) ||
++        (*cancel->env)->CallBooleanMethod(cancel->env, cancel->thread, cancel->interrupted);
++}
++
++jbyteArray
++Java_org_videolan_libvlc_Media_nativeReadCastSubtitles(JNIEnv *env, jobject thiz, jint index)
++{
++    vlcjni_object *object = VLCJniObject_getInstance(env, thiz);
++    if (!object || index < -1) return NULL;
++    jclass thread_class = (*env)->FindClass(env, "java/lang/Thread");
++    if (!thread_class) return NULL;
++    jmethodID current = (*env)->GetStaticMethodID(env, thread_class, "currentThread", "()Ljava/lang/Thread;");
++    jmethodID interrupted = (*env)->GetMethodID(env, thread_class, "isInterrupted", "()Z");
++    if (!current || !interrupted) { (*env)->DeleteLocalRef(env, thread_class); return NULL; }
++    jobject thread = (*env)->CallStaticObjectMethod(env, thread_class, current);
++    (*env)->DeleteLocalRef(env, thread_class);
++    if (!thread) return NULL;
++    struct cast_cancel cancel = {env, thread, interrupted};
++    char *text = libvlc_media_read_cast_subtitles(object->u.p_m, index, cast_interrupted, &cancel);
++    (*env)->DeleteLocalRef(env, thread);
++    jbyteArray result = NULL;
++    if (text && !(*env)->ExceptionCheck(env))
++    {
++        size_t length = strlen(text);
++        if (length <= 4 * 1024 * 1024)
++        {
++            result = (*env)->NewByteArray(env, length);
++            if (result) (*env)->SetByteArrayRegion(env, result, 0, length, (const jbyte *)text);
++        }
++    }
++    libvlc_free(text);
++    return result;
++}
++
+ jobject
+ Java_org_videolan_libvlc_Media_nativeGetTracks(JNIEnv *env, jobject thiz)
+ {
+diff --git a/libvlc/src/org/videolan/libvlc/Media.java b/libvlc/src/org/videolan/libvlc/Media.java
+index 58a40ec..86ff915 100644
+--- a/libvlc/src/org/videolan/libvlc/Media.java
++++ b/libvlc/src/org/videolan/libvlc/Media.java
+@@ -376,6 +376,21 @@ public class Media extends VLCObject<IMedia.Event> implements IMedia {
+         }
+     }
+ 
++    /** Supported embedded Cast subtitle tracks as JSON, or null on failure. Worker thread only. */
++    public String getCastSubtitleTracks() {
++        byte[] result = nativeReadCastSubtitles(-1);
++        return result == null ? null : new String(result, java.nio.charset.Charset.forName("UTF-8"));
++    }
++
++    /** Convert an embedded container stream to WebVTT. Thread interruption cancels extraction. */
++    public String extractCastSubtitle(int streamIndex) {
++        if (streamIndex < 0) throw new IllegalArgumentException("Invalid subtitle stream index");
++        byte[] result = nativeReadCastSubtitles(streamIndex);
++        return result == null ? null : new String(result, java.nio.charset.Charset.forName("UTF-8"));
++    }
++
++    private native byte[] nativeReadCastSubtitles(int streamIndex);
++
+     private Track[] getTracks() {
+         synchronized (this) {
+             if (mNativeTracks != null)

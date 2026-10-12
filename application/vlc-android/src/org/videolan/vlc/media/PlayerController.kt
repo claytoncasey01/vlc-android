@@ -28,6 +28,7 @@ import org.videolan.vlc.repository.EqualizerRepository
 import org.videolan.vlc.repository.SlaveRepository
 import org.videolan.vlc.util.CastSubtitleBridge
 import org.videolan.vlc.util.CastSubtitleDocument
+import org.videolan.vlc.util.EmbeddedCastSubtitles
 import java.io.ByteArrayOutputStream
 import java.nio.charset.Charset
 import kotlin.math.absoluteValue
@@ -53,11 +54,22 @@ class PlayerController(val context: Context) : IVLCVout.Callback, MediaPlayer.Ev
         private set
     private var isChromecast = false
     val supportsCastSubtitles get() = isChromecast && CastSubtitleBridge.isSupported
-    private data class CastTrack(val id: String, val name: String, val uri: Uri, val document: CastSubtitleDocument)
+    private data class CastTrack(val id: String, val name: String, val uri: Uri,
+                                 var document: CastSubtitleDocument?, val embeddedIndex: Int? = null)
     private val castTracks = LinkedHashMap<String, CastTrack>()
     private var castTrackId = "-1"
+    private var castActiveTrackId = "-1"
     private var subtitleMediaGeneration = 0L
     private var castSubtitleDelay = 0L
+    private var subtitleSourceUri: Uri? = null
+    private var embeddedDiscoveryJob: Job? = null
+    private var embeddedSelectionJob: Job? = null
+    private var castSelectionGeneration = 0L
+    private var embeddedTracksDiscovered = false
+    val castSubtitleTracksChanged = MutableLiveData(0L)
+    private fun notifyCastSubtitleTracksChanged() {
+        castSubtitleTracksChanged.value = (castSubtitleTracksChanged.value ?: 0L) + 1
+    }
 
     fun getVout(): IVLCVout? = mediaplayer.vlcVout
 
@@ -78,6 +90,9 @@ class PlayerController(val context: Context) : IVLCVout.Callback, MediaPlayer.Ev
     }
 
     fun stop() {
+        embeddedDiscoveryJob?.cancel()
+        embeddedSelectionJob?.cancel()
+        castSelectionGeneration++
         if (mediaplayer.hasMedia() && !mediaplayer.isReleased) mediaplayer.stop()
         setPlaybackStopped()
     }
@@ -88,11 +103,18 @@ class PlayerController(val context: Context) : IVLCVout.Callback, MediaPlayer.Ev
     }
 
     private var mediaplayerEventListener: MediaPlayerEventListener? = null
-    internal suspend fun startPlayback(media: IMedia, listener: MediaPlayerEventListener, time: Long) {
+    internal suspend fun startPlayback(media: IMedia, listener: MediaPlayerEventListener, time: Long, sourceUri: Uri = media.uri) {
+        embeddedDiscoveryJob?.cancel()
+        embeddedSelectionJob?.cancel()
+        castSelectionGeneration++
         subtitleMediaGeneration++
         castTracks.clear()
         castTrackId = "-1"
+        castActiveTrackId = "-1"
         castSubtitleDelay = 0L
+        subtitleSourceUri = sourceUri
+        embeddedTracksDiscovered = false
+        notifyCastSubtitleTracksChanged()
         mediaplayerEventListener = listener
         resetPlaybackState(time, media.duration)
         mediaplayer.setEventListener(null)
@@ -105,6 +127,7 @@ class PlayerController(val context: Context) : IVLCVout.Callback, MediaPlayer.Ev
             }
             mediaplayer.setVideoTitleDisplay(MediaPlayer.Position.Disable, 0)
             mediaplayer.play()
+            if (supportsCastSubtitles) discoverEmbeddedTracks()
         }
     }
 
@@ -195,6 +218,10 @@ class PlayerController(val context: Context) : IVLCVout.Callback, MediaPlayer.Ev
         val added = if (supportsCastSubtitles) true else mediaplayer.addSlave(IMedia.Slave.Type.Subtitle, uri, select)
         if (!CastSubtitleBridge.isSupported) return added
         val generation = subtitleMediaGeneration
+        val selection = if (select) {
+            embeddedSelectionJob?.cancel()
+            ++castSelectionGeneration
+        } else castSelectionGeneration
         launch {
             try {
                 val document = withContext(Dispatchers.IO) {
@@ -217,11 +244,12 @@ class PlayerController(val context: Context) : IVLCVout.Callback, MediaPlayer.Ev
                 if (generation != subtitleMediaGeneration || mediaplayer.isReleased) return@launch
                 val id = "cast:${uri}"
                 castTracks[id] = CastTrack(id, uri.lastPathSegment ?: "External subtitles", uri, document)
-                if (select) {
+                if (select && selection == castSelectionGeneration) {
                     if (!supportsCastSubtitles || CastSubtitleBridge.setDocument(mediaplayer, document.toWebVtt(subtitleDelayMs = castSubtitleDelay / 1000)))
-                        castTrackId = id
+                        { castTrackId = id; castActiveTrackId = id }
                     else Toast.makeText(context, R.string.subtitle_cast_error, Toast.LENGTH_LONG).show()
                 }
+                notifyCastSubtitleTracksChanged()
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 if (supportsCastSubtitles && generation == subtitleMediaGeneration)
@@ -250,9 +278,39 @@ class PlayerController(val context: Context) : IVLCVout.Callback, MediaPlayer.Ev
 
     fun setSpuTrack(index: String): Boolean {
         if (!supportsCastSubtitles) return !mediaplayer.isReleased && mediaplayer.hasMedia() && mediaplayer.setSpuTrack(index)
+        val selected = if (index == "-1") null else castTracks[index] ?: return false
+        embeddedSelectionJob?.cancel()
+        val selection = ++castSelectionGeneration
+        if (selected?.embeddedIndex != null && selected.document == null) {
+            val generation = subtitleMediaGeneration
+            val previous = castActiveTrackId
+            castTrackId = index
+            notifyCastSubtitleTracksChanged()
+            Toast.makeText(context, R.string.subtitle_cast_preparing, Toast.LENGTH_SHORT).show()
+            embeddedSelectionJob = launch {
+                try {
+                    val document = EmbeddedCastSubtitles.extract(context, selected.uri, selected.embeddedIndex)
+                    if (generation != subtitleMediaGeneration || selection != castSelectionGeneration || !supportsCastSubtitles || mediaplayer.isReleased) return@launch
+                    selected.document = document
+                    if (!CastSubtitleBridge.setDocument(mediaplayer, document.toWebVtt(subtitleDelayMs = castSubtitleDelay / 1000)))
+                        throw IllegalStateException("Could not activate embedded subtitles")
+                    castActiveTrackId = index
+                } catch (error: Exception) {
+                    if (error is CancellationException) throw error
+                    if (generation == subtitleMediaGeneration && selection == castSelectionGeneration) {
+                        castTrackId = previous
+                        notifyCastSubtitleTracksChanged()
+                        Toast.makeText(context, R.string.subtitle_cast_error, Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+            return true
+        }
         val document = if (index == "-1") null else castTracks[index]?.document ?: return false
         if (!CastSubtitleBridge.setDocument(mediaplayer, document?.toWebVtt(subtitleDelayMs = castSubtitleDelay / 1000))) return false
         castTrackId = index
+        castActiveTrackId = index
+        notifyCastSubtitleTracksChanged()
         return true
     }
 
@@ -277,13 +335,43 @@ class PlayerController(val context: Context) : IVLCVout.Callback, MediaPlayer.Ev
         isChromecast = renderer?.type == "chromecast"
         if (supportsCastSubtitles) {
             castTracks[castTrackId]?.document?.let { CastSubtitleBridge.setDocument(mediaplayer, it.toWebVtt(subtitleDelayMs = castSubtitleDelay / 1000)) }
+            discoverEmbeddedTracks()
         } else if (renderer == null && CastSubtitleBridge.isSupported) {
+            embeddedDiscoveryJob?.cancel()
+            embeddedSelectionJob?.cancel()
+            castSelectionGeneration++
             CastSubtitleBridge.setDocument(mediaplayer, null)
-            castTracks[castTrackId]?.let { mediaplayer.addSlave(IMedia.Slave.Type.Subtitle, it.uri, true) }
+            castTracks[castTrackId]?.takeIf { it.embeddedIndex == null }?.let { mediaplayer.addSlave(IMedia.Slave.Type.Subtitle, it.uri, true) }
+        }
+    }
+
+    private fun discoverEmbeddedTracks() {
+        val uri = subtitleSourceUri ?: return
+        if (embeddedTracksDiscovered || embeddedDiscoveryJob?.isActive == true) return
+        val generation = subtitleMediaGeneration
+        embeddedDiscoveryJob = launch {
+            try {
+                val tracks = EmbeddedCastSubtitles.discover(context, uri)
+                if (generation != subtitleMediaGeneration || !supportsCastSubtitles) return@launch
+                tracks.forEachIndexed { ordinal, track ->
+                    val id = "cast:embedded:${track.index}"
+                    val name = track.title.ifBlank { context.getString(R.string.subtitle_cast_embedded_track, ordinal + 1) }
+                    val label = if (track.language.isBlank() || track.language == "und") name else "$name (${track.language})"
+                    castTracks[id] = CastTrack(id, label, uri, null, track.index)
+                }
+                embeddedTracksDiscovered = true
+                notifyCastSubtitleTracksChanged()
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                android.util.Log.w("VLC", "Could not discover embedded cast subtitle tracks")
+            }
         }
     }
 
     fun release(player: MediaPlayer = mediaplayer) {
+        embeddedDiscoveryJob?.cancel()
+        embeddedSelectionJob?.cancel()
+        castSelectionGeneration++
         player.setEventListener(null)
         if (isVideoPlaying()) player.vlcVout.detachViews()
         releaseMedia()
@@ -316,7 +404,7 @@ class PlayerController(val context: Context) : IVLCVout.Callback, MediaPlayer.Ev
     private fun newMediaPlayer() : MediaPlayer {
         return MediaPlayer(VLCInstance.getInstance(context)).apply {
             if (BuildConfig.DEBUG && CastSubtitleBridge.isSupported)
-                android.util.Log.i("VLC", "Cast alpha4: VLC Android 3.7.1 / LibVLC 3.7.0 / FFmpeg 4.4.5")
+                android.util.Log.i("VLC", "Cast alpha5: embedded text subtitles / VLC Android 3.7.1 / FFmpeg 4.4.5")
             setAudioDigitalOutputEnabled(VLCOptions.isAudioDigitalOutputEnabled(settings))
             VLCOptions.getAout(settings)?.let { setAudioOutput(it) }
             setRenderer(PlaybackService.renderer.value)

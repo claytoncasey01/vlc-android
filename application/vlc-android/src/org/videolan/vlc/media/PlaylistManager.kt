@@ -568,7 +568,7 @@ class PlaylistManager(val service: PlaybackService) : MediaWrapperList.EventList
                 }
             }
             media.setEventListener(this@PlaylistManager)
-            player.startPlayback(media, mediaplayerEventListener, start)
+            player.startPlayback(media, mediaplayerEventListener, start, mw.uri)
             player.setSlaves(media, mw)
             if (browserAudioActive) player.setVolume(0)
             newMedia = true

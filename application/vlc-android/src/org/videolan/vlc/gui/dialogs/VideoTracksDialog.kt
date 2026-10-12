@@ -190,7 +190,13 @@ class VideoTracksDialog : VLCBottomSheetDialogFragment() {
             binding.audioTracks.options.collapse()
         }
         super.onViewCreated(view, savedInstanceState)
-        PlaybackService.serviceFlow.onEach { onServiceChanged(it) }.launchIn(lifecycleScope)
+        var observedService: PlaybackService? = null
+        PlaybackService.serviceFlow.onEach { service ->
+            observedService?.castSubtitleTracksChanged?.removeObservers(viewLifecycleOwner)
+            observedService = service
+            service?.castSubtitleTracksChanged?.observe(viewLifecycleOwner) { onServiceChanged(service) }
+            onServiceChanged(service)
+        }.launchIn(viewLifecycleOwner.lifecycleScope)
     }
 
     private fun generateSeparator(parent: ViewGroup, margin: Boolean = false) {
