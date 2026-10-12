@@ -1,0 +1,82 @@
+diff --git a/libvlc/jni/libvlcjni-mediaplayer.c b/libvlc/jni/libvlcjni-mediaplayer.c
+index 382efb3..9ecb4a0 100644
+--- a/libvlc/jni/libvlcjni-mediaplayer.c
++++ b/libvlc/jni/libvlcjni-mediaplayer.c
+@@ -1005,6 +1005,38 @@ Java_org_videolan_libvlc_MediaPlayer_nativeSetSpuDelay(JNIEnv *env,
+     return libvlc_video_set_spu_delay(p_obj->u.p_mp, delay) == 0 ? true : false;
+ }
+ 
++jboolean
++Java_org_videolan_libvlc_MediaPlayer_nativeSupportsCastSubtitles(JNIEnv *env, jclass clazz)
++{
++    (void)env;
++    (void)clazz;
++    return true;
++}
++
++jboolean
++Java_org_videolan_libvlc_MediaPlayer_nativeSetCastSubtitle(JNIEnv *env, jobject thiz,
++                                                        jbyteArray webvtt)
++{
++    vlcjni_object *object = VLCJniObject_getInstance(env, thiz);
++    if (!object) return false;
++    if (!webvtt)
++        return libvlc_media_player_set_cast_subtitle(object->u.p_mp, NULL) == 0;
++    jsize size = (*env)->GetArrayLength(env, webvtt);
++    if (size > 4 * 1024 * 1024) return false;
++    char *text = malloc((size_t)size + 1);
++    if (!text) return false;
++    (*env)->GetByteArrayRegion(env, webvtt, 0, size, (jbyte *)text);
++    if ((*env)->ExceptionCheck(env) || memchr(text, '\0', size))
++    {
++        free(text);
++        return false;
++    }
++    text[size] = '\0';
++    int result = libvlc_media_player_set_cast_subtitle(object->u.p_mp, text);
++    free(text);
++    return result == 0;
++}
++
+ float
+ Java_org_videolan_libvlc_MediaPlayer_nativeGetScale(JNIEnv *env, jobject thiz)
+ {
+diff --git a/libvlc/src/org/videolan/libvlc/MediaPlayer.java b/libvlc/src/org/videolan/libvlc/MediaPlayer.java
+index aa1519a..1e1f729 100644
+--- a/libvlc/src/org/videolan/libvlc/MediaPlayer.java
++++ b/libvlc/src/org/videolan/libvlc/MediaPlayer.java
+@@ -1227,6 +1227,25 @@ public class MediaPlayer extends VLCObject<MediaPlayer.Event> {
+         return nativeSetSpuDelay(delay);
+     }
+ 
++    /** Whether the packaged native engine supports receiver-rendered Cast text tracks. */
++    public static boolean supportsCastSubtitles() {
++        try {
++            return nativeSupportsCastSubtitles();
++        } catch (UnsatisfiedLinkError error) {
++            return false;
++        }
++    }
++
++    /**
++     * Set a complete WebVTT document in original media time, or null to disable.
++     * Changing the document reloads the cast stream at its current position.
++     * UTF-8 bytes are used instead of JNI's modified UTF-8 to preserve Unicode.
++     */
++    public boolean setCastSubtitle(String webvtt) {
++        return nativeSetCastSubtitle(webvtt == null ? null :
++                webvtt.getBytes(java.nio.charset.Charset.forName("UTF-8")));
++    }
++
+     /**
+      * Apply new equalizer settings to a media player.
+      *
+@@ -1505,6 +1524,8 @@ public class MediaPlayer extends VLCObject<MediaPlayer.Event> {
+     private native boolean nativeSetSpuTrack(int index);
+     private native long nativeGetSpuDelay();
+     private native boolean nativeSetSpuDelay(long delay);
++    private static native boolean nativeSupportsCastSubtitles();
++    private native boolean nativeSetCastSubtitle(byte[] webvtt);
+     private native boolean nativeAddSlave(int type, String location, boolean select);
+     private native boolean nativeRecord(String directory);
+     private native boolean nativeSetEqualizer(Equalizer equalizer);

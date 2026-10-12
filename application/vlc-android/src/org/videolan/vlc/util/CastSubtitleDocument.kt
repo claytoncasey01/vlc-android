@@ -52,6 +52,7 @@ class CastSubtitleDocument private constructor(private val cues: List<Cue>) {
         private val srtTiming = Regex("^(\\d{2,}:\\d{2}:\\d{2},\\d{3})[ \\t]+-->[ \\t]+(\\d{2,}:\\d{2}:\\d{2},\\d{3})[ \\t]*$")
         private val vttTiming = Regex("^((?:\\d{2,}:)?\\d{2}:\\d{2}\\.\\d{3})[ \\t]+-->[ \\t]+((?:\\d{2,}:)?\\d{2}:\\d{2}\\.\\d{3})(?:[ \\t]+(.*))?$")
         private val srtMarkup = Regex("</?(?:b|i|u)>|&(?:amp|lt|gt|nbsp|lrm|rlm);|[&<>]", RegexOption.IGNORE_CASE)
+        private val srtFontMarkup = Regex("</?font(?:\\s[^>]*)?>", RegexOption.IGNORE_CASE)
 
         /** Parse SRT or basic WebVTT; invalid or unsupported documents fail explicitly. */
         fun parse(source: String, format: Format): CastSubtitleDocument {
@@ -104,8 +105,11 @@ class CastSubtitleDocument private constructor(private val cues: List<Cue>) {
                 require(end > start) { "Cue end must be after its start at line ${blockStart + 1}" }
                 require(block.size > timingLine + 1) { "Missing cue text at line ${blockStart + 1}" }
                 val rawText = block.drop(timingLine + 1).joinToString("\n")
-                require("-->" !in rawText) { "Missing blank line between cues at line ${blockStart + 1}" }
-                val text = if (format == Format.SRT) srtMarkup.replace(rawText) {
+                require(rawText.lineSequence().none { srtTiming.matches(it) || vttTiming.matches(it) }) {
+                    "Missing blank line between cues at line ${blockStart + 1}"
+                }
+                require(format != Format.WEBVTT || "-->" !in rawText) { "Invalid WebVTT cue text" }
+                val text = if (format == Format.SRT) srtMarkup.replace(srtFontMarkup.replace(rawText, "")) {
                     when (it.value) {
                         "&" -> "&amp;"
                         "<" -> "&lt;"

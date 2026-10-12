@@ -359,6 +359,10 @@ if [ -z "$VLC_SRC_DIR" ]; then
     (cd ${VLC_LIBJNI_PATH} && ./buildsystem/get-vlc.sh ${get_vlc_args})
 fi
 
+if [ "$FORCE_VLC_4" != 1 ]; then
+    buildsystem/apply-cast-subtitle-patches.sh "$VLC_LIBJNI_PATH" "${VLC_SRC_DIR:-$VLC_LIBJNI_PATH/vlc}"
+fi
+
 # Always clone VLC when using --init since we'll need to package some files
 # during the final assembly (lua/hrtfs/..)
 if [ "$GRADLE_SETUP" = 1 ]; then
@@ -384,7 +388,7 @@ if [ "$BUILD_MEDIALIB" != 1 ] || [ ! -d "${VLC_LIBJNI_PATH}/libvlc/jni/libs/" ];
         if [ "$FORCE_VLC_4" = 1 ]; then
             export VLC_PREBUILT_CONTRIBS_URL="https://artifacts.videolan.org/vlc/android-${ARCH}/vlc-contrib-${TRIPLET}-${VLC_CONTRIB_SHA}.tar.bz2"
         else
-            export VLC_PREBUILT_CONTRIBS_URL="https://artifacts.videolan.org/vlc-3.0/android-${ARCH}/vlc-contrib-${TRIPLET}-${VLC_CONTRIB_SHA}.tar.bz2"
+            export VLC_PREBUILT_CONTRIBS_URL="https://artifacts.videolan.org/vlc-3.0/android-${ARCH}/vlc-contrib-${TRIPLET}-${VLC_CONTRIB_SHA}.tar.zst"
         fi
         if ${VLC_LIBJNI_PATH}/vlc/extras/ci/check-url.sh "$VLC_PREBUILT_CONTRIBS_URL"; then CONTRIB_FLAGS="--with-prebuilt-contribs"; fi
     fi

@@ -1108,6 +1108,7 @@
     <string name="go_to_album_artist">Go to album artist</string>
     <string name="create_shortcut">Create a launcher shortcut</string>
     <string name="no_sub_renderer">Subtitles are not yet supported while casting</string>
+    <string name="subtitle_cast_error">Could not cast these subtitles. Choose a local SRT or WebVTT file.</string>
     <string name="enqueuing">Loading your media</string>
     <string name="soundfont">MIDI SoundFont</string>
     <string name="soundfont_summary">Pick a SoundFont file to play midi audio tracks</string>

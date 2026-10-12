@@ -73,9 +73,9 @@ class CastSubtitleDocumentTest {
     @Test
     fun srtEscapesLiteralTextWhileRetainingBasicFormattingAndEntities() {
         val source = "1\n00:00:01,000 --> 00:00:02,000\n" +
-                "<I>Hello</I> & goodbye <world> &amp; <font color=\"red\">text</font>"
+                "<I>Hello</I> & goodbye <world> &amp; <font color=\"red\">text</font> -->"
         assertEquals("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n" +
-                "<i>Hello</i> &amp; goodbye &lt;world&gt; &amp; &lt;font color=\"red\"&gt;text&lt;/font&gt;\n\n",
+                "<i>Hello</i> &amp; goodbye &lt;world&gt; &amp; text --&gt;\n\n",
                 parseSrt(source).toWebVtt())
     }
 
