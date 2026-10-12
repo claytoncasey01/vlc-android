@@ -359,6 +359,10 @@ if [ -z "$VLC_SRC_DIR" ]; then
     (cd ${VLC_LIBJNI_PATH} && ./buildsystem/get-vlc.sh ${get_vlc_args})
 fi
 
+if [ "$FORCE_VLC_4" != 1 ]; then
+    buildsystem/apply-cast-subtitle-patches.sh "$VLC_LIBJNI_PATH" "${VLC_SRC_DIR:-$VLC_LIBJNI_PATH/vlc}"
+fi
+
 # Always clone VLC when using --init since we'll need to package some files
 # during the final assembly (lua/hrtfs/..)
 if [ "$GRADLE_SETUP" = 1 ]; then

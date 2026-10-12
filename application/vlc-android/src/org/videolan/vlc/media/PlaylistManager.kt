@@ -726,6 +726,7 @@ class PlaylistManager(val service: PlaybackService) : MediaWrapperList.EventList
 
     fun setSpuTrack(index: String) {
         if (!player.setSpuTrack(index)) return
+        if (player.supportsCastSubtitles) return // Cast IDs are not native elementary-stream IDs.
         val media = getCurrentMedia() ?: return
         if (media.id != 0L) launch(Dispatchers.IO) { media.setStringMeta(MediaWrapper.META_SUBTITLE_TRACK, index) }
     }
