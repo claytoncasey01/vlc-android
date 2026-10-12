@@ -10,8 +10,10 @@ cd "$cast_repo_root"
 # Fetch the pinned sources and apply both native and JNI changes.
 buildsystem/compile.sh --init -a arm64
 cast_jni_root=${VLC_LIBJNI_PATH:-$cast_repo_root/libvlcjni}
-cast_contrib_sha=$(cd "$cast_jni_root/vlc" && extras/ci/get-contrib-sha.sh android-arm64)
-VLC_PREBUILT_CONTRIBS_URL=${VLC_PREBUILT_CONTRIBS_URL:-https://artifacts.videolan.org/vlc-3.0/android-arm64/vlc-contrib-aarch64-linux-android-$cast_contrib_sha.tar.zst}
+# Archived VideoLAN arm64 contribs with FFmpeg 4.4.5 and libmatroska 1.7.0.
+# The original March contrib archive is no longer hosted; do not fetch "latest".
+cast_contrib_sha=d17fb017f5d821ad93efbc50ca9ccb40b1b281a5
+VLC_PREBUILT_CONTRIBS_URL=${VLC_PREBUILT_CONTRIBS_URL:-https://artifacts.videolan.org/vlc-3.0/android-arm64/vlc-contrib-aarch64-linux-android-$cast_contrib_sha.tar.bz2}
 export VLC_PREBUILT_CONTRIBS_URL
 
 "$cast_jni_root/buildsystem/compile-libvlc.sh" -a arm64 --with-prebuilt-contribs

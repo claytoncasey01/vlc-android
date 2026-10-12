@@ -108,7 +108,7 @@ index 4cb31520..fe5cac3e 100644
  libstream_out_chromecast_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) -Istream_out/chromecast/@PROTOBUF_VERSION@ $(CHROMECAST_CFLAGS)
  libstream_out_chromecast_plugin_la_LIBADD = $(CHROMECAST_LIBS) $(SOCKET_LIBS)
 diff --git a/modules/stream_out/chromecast/chromecast.h b/modules/stream_out/chromecast/chromecast.h
-index 03105547..9c1bd9eb 100644
+index 1fbb5ec9..7e4dd4dc 100644
 --- a/modules/stream_out/chromecast/chromecast.h
 +++ b/modules/stream_out/chromecast/chromecast.h
 @@ -38,6 +38,7 @@
@@ -137,7 +137,7 @@ index 03105547..9c1bd9eb 100644
  
      void setOnInputEventCb(on_input_event_itf on_input_event, void *on_input_event_data);
      void setDemuxEnabled(bool enabled, on_paused_changed_itf on_paused_changed,
-@@ -240,6 +243,7 @@ private:
+@@ -238,6 +241,7 @@ private:
      static void set_meta(void*, vlc_meta_t *p_meta);
  
      void prepareHttpArtwork();
@@ -145,7 +145,7 @@ index 03105547..9c1bd9eb 100644
  
      static vlc_tick_t   timeCCToVLC(double);
      static std::string  timeVLCToCC(vlc_tick_t);
-@@ -298,6 +302,11 @@ private:
+@@ -295,6 +299,11 @@ private:
      char             *m_art_url;
      unsigned          m_art_idx;
  
@@ -179,7 +179,7 @@ index 35abdd00..172830f9 100644
  
  # ifdef __cplusplus
 diff --git a/modules/stream_out/chromecast/chromecast_communication.cpp b/modules/stream_out/chromecast/chromecast_communication.cpp
-index 477b3fde..5c31388d 100644
+index 81336a60..069696f5 100644
 --- a/modules/stream_out/chromecast/chromecast_communication.cpp
 +++ b/modules/stream_out/chromecast/chromecast_communication.cpp
 @@ -28,6 +28,7 @@
@@ -190,7 +190,7 @@ index 477b3fde..5c31388d 100644
  #ifdef HAVE_POLL
  # include <poll.h>
  #endif
-@@ -357,12 +358,17 @@ std::string ChromecastCommunication::GetMedia( const std::string& mime,
+@@ -357,13 +358,19 @@ std::string ChromecastCommunication::GetMedia( const std::string& mime,
  }
  
  unsigned ChromecastCommunication::msgPlayerLoad( const std::string& destinationId,
@@ -202,16 +202,19 @@ index 477b3fde..5c31388d 100644
      std::stringstream ss;
      ss << "{\"type\":\"LOAD\","
 -       <<  "\"media\":{" << GetMedia( mime, p_meta ) << "},"
+-       <<  "\"autoplay\":\"false\","
 +       <<  "\"media\":{" << GetMedia( mime, p_meta );
 +    if (!subtitle_url.empty())
 +        ss << ',' << cast_subtitles::track(subtitle_url);
-+    ss << "},"
-+       << "\"activeTrackIds\":" << (subtitle_url.empty() ? "[]" : "[1]") << ','
-        <<  "\"autoplay\":\"false\","
++    ss << "},";
++    if (!subtitle_url.empty())
++        ss << "\"activeTrackIds\":[1],";
++    ss <<  "\"autoplay\":\"false\","
         <<  "\"requestId\":" << id
         << "}";
+ 
 diff --git a/modules/stream_out/chromecast/chromecast_ctrl.cpp b/modules/stream_out/chromecast/chromecast_ctrl.cpp
-index 01800007..b8602b88 100644
+index a552631d..4b015838 100644
 --- a/modules/stream_out/chromecast/chromecast_ctrl.cpp
 +++ b/modules/stream_out/chromecast/chromecast_ctrl.cpp
 @@ -32,6 +32,57 @@
@@ -272,7 +275,7 @@ index 01800007..b8602b88 100644
  
  #include <cassert>
  #include <cerrno>
-@@ -114,6 +165,8 @@ intf_sys_t::intf_sys_t(vlc_object_t * const p_this, int port, std::string device
+@@ -113,6 +164,8 @@ intf_sys_t::intf_sys_t(vlc_object_t * const p_this, int port, std::string device
   , m_httpd_file(NULL)
   , m_art_url(NULL)
   , m_art_idx(0)
@@ -281,7 +284,7 @@ index 01800007..b8602b88 100644
   , m_cc_time_date( VLC_TICK_INVALID )
   , m_cc_time( VLC_TICK_INVALID )
   , m_pingRetriesLeft( PING_WAIT_RETRIES )
-@@ -149,6 +202,9 @@ intf_sys_t::intf_sys_t(vlc_object_t * const p_this, int port, std::string device
+@@ -140,6 +193,9 @@ intf_sys_t::intf_sys_t(vlc_object_t * const p_this, int port, std::string device
      m_common.pf_send_input_event = send_input_event;
      m_common.pf_set_pause_state  = set_pause_state;
      m_common.pf_set_meta         = set_meta;
@@ -291,7 +294,7 @@ index 01800007..b8602b88 100644
  
      assert( var_Type( m_module->obj.parent->obj.parent, CC_SHARED_VAR_NAME) == 0 );
      if (var_Create( m_module->obj.parent->obj.parent, CC_SHARED_VAR_NAME, VLC_VAR_ADDRESS ) == VLC_SUCCESS )
-@@ -212,6 +268,7 @@ intf_sys_t::~intf_sys_t()
+@@ -203,6 +259,7 @@ intf_sys_t::~intf_sys_t()
          httpd_FileDelete( m_httpd_file );
  
      free( m_art_url );
@@ -299,7 +302,7 @@ index 01800007..b8602b88 100644
  
      vlc_cond_destroy(&m_stateChangedCond);
      vlc_cond_destroy(&m_pace_cond);
-@@ -352,6 +409,33 @@ void intf_sys_t::prepareHttpArtwork()
+@@ -343,6 +400,33 @@ void intf_sys_t::prepareHttpArtwork()
      vlc_meta_Set( m_meta, vlc_meta_ArtworkURL, ss.str().c_str() );
  }
  
@@ -333,7 +336,7 @@ index 01800007..b8602b88 100644
  void intf_sys_t::tryLoad()
  {
      if( !m_request_load )
-@@ -382,7 +466,8 @@ void intf_sys_t::tryLoad()
+@@ -373,7 +457,8 @@ void intf_sys_t::tryLoad()
      // Reset the mediaSessionID to allow the new session to become the current one.
      // we cannot start a new load when the last one is still processing
      m_last_request_id =
@@ -343,7 +346,7 @@ index 01800007..b8602b88 100644
      if( m_last_request_id != ChromecastCommunication::kInvalidId )
          m_state = Loading;
  }
-@@ -408,6 +493,7 @@ void intf_sys_t::setHasInput( const std::string mime_type )
+@@ -399,6 +484,7 @@ void intf_sys_t::setHasInput( const std::string mime_type )
      std::swap(m_msgQueue, empty);
  
      prepareHttpArtwork();
@@ -352,7 +355,7 @@ index 01800007..b8602b88 100644
      m_request_stop = false;
      m_played_once = false;
 diff --git a/modules/stream_out/chromecast/chromecast_demux.cpp b/modules/stream_out/chromecast/chromecast_demux.cpp
-index 724ad17b..c0c58cae 100644
+index 724ad17b..8b4faad5 100644
 --- a/modules/stream_out/chromecast/chromecast_demux.cpp
 +++ b/modules/stream_out/chromecast/chromecast_demux.cpp
 @@ -162,6 +162,8 @@ struct demux_cc
@@ -364,12 +367,17 @@ index 724ad17b..c0c58cae 100644
      }
  
      ~demux_cc()
-@@ -262,6 +264,8 @@ struct demux_cc
+@@ -262,6 +264,13 @@ struct demux_cc
          int ret = VLC_DEMUXER_SUCCESS;
          if( !m_demux_eof )
          {
 +            if (m_start_time < 0 || m_start_pos < 0.0f)
-+                initTimes();
++            {
++                char *webvtt = var_InheritString(p_demux, CC_SUBTITLE_VAR_NAME);
++                if (webvtt && *webvtt)
++                    initTimes();
++                free(webvtt);
++            }
              ret = demux_Demux( p_demux->p_next );
              if( ret != VLC_DEMUXER_EGENERIC
               && ( m_start_time < 0 || m_start_pos < 0.0f ) )
@@ -522,10 +530,10 @@ index 426df084..7f55f309 100644
                          cl->query.i_type = msg_type[i].i_type;
                          if (cl->query.i_proto != msg_type[i].i_proto) {
 diff --git a/test/Makefile.am b/test/Makefile.am
-index c075bc86..d1018777 100644
+index 1b6bd9f3..5abf238a 100644
 --- a/test/Makefile.am
 +++ b/test/Makefile.am
-@@ -38,7 +38,9 @@ check_PROGRAMS = \
+@@ -36,7 +36,9 @@ check_PROGRAMS = \
  	test_modules_keystore
  
  if ENABLE_SOUT

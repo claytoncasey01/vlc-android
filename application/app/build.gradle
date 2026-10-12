@@ -33,6 +33,12 @@ android {
         applicationId rootProject.ext.appId
         versionCode rootProject.ext.versionCode
         versionName rootProject.ext.versionName
+        if (rootProject.hasProperty('castSubtitleLibVlc') && rootProject.getProperty('castSubtitleLibVlc').toBoolean()) {
+            versionName rootProject.ext.versionName + ' - Cast alpha4'
+            minSdkVersion 30
+            // Allow an in-place update over the earlier development-based APKs.
+            versionCode 3070140
+        }
         vectorDrawables.useSupportLibrary = true
         multiDexEnabled = true
 
@@ -92,6 +98,10 @@ android {
         }
         debug {
             applicationIdSuffix ".debug"
+            if (rootProject.hasProperty('castSubtitleLibVlc') && rootProject.getProperty('castSubtitleLibVlc').toBoolean()) {
+                applicationIdSuffix ".casttest"
+                resValue "string", "app_name", "VLC Cast Test"
+            }
             jniDebuggable true
         }
         dev {
