@@ -96,7 +96,7 @@ class VideoTracksDialog : VLCBottomSheetDialogFragment() {
                 binding.audioTracks.trackTitle.contentDescription = getString(R.string.talkback_audio_tracks)
             }
             playbackService.spuTracks?.let { trackList ->
-                if (!playbackService.hasRenderer()) {
+                if (!playbackService.hasRenderer() || playbackService.supportsCastSubtitles) {
                     val trackAdapter = TrackAdapter(generateTrackList(trackList), trackList.firstOrNull { it.getId() == playbackService.spuTrack }, getString(R.string.track_text))
                     trackAdapter.setOnTrackSelectedListener { track ->
                         trackSelectionListener.invoke(track.getId(), TrackType.SPU)

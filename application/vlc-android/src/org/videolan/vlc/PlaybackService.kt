@@ -1871,6 +1871,7 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
 
     @MainThread
     fun hasRenderer() = playlistManager.player.hasRenderer
+    val supportsCastSubtitles get() = playlistManager.player.supportsCastSubtitles
 
     @MainThread
     fun setRenderer(item: RendererItem?) {
