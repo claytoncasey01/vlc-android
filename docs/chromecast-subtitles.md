@@ -40,6 +40,8 @@ The build applies the patches in `buildsystem/patches/vlc` and
 `buildsystem/patches/libvlcjni` without resetting modified sources. The
 `castSubtitleLibVlc` Gradle property substitutes the patched local LibVLC for all
 Maven LibVLC dependencies, so the APK cannot mix the old and patched engines.
+The engine and JNI use release compiler settings; the Android app remains
+debuggable so it installs alongside regular VLC and supports log capture.
 Ordinary builds using the published engine retain the casting subtitle restriction.
 
 The native timestamp/track tests are part of VLC's test sources. The Android
