@@ -189,7 +189,7 @@ dependencies {
     api 'androidx.gridlayout:gridlayout:1.0.0'
     api "androidx.car.app:app:$rootProject.ext.carVersion"
 
-    ksp ("org.xerial:sqlite-jdbc:jdbcVersion")
+    ksp ("org.xerial:sqlite-jdbc:$rootProject.ext.jdbcVersion")
     ksp("androidx.room:room-compiler:$rootProject.ext.roomVersion")
 
     api "androidx.paging:paging-runtime-ktx:$rootProject.ext.pagingVersion"

@@ -697,6 +697,8 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
         @MainThread
         get() = playlistManager.player.getSpuTracks()
 
+    val castSubtitleTracksChanged get() = playlistManager.player.castSubtitleTracksChanged
+
     val spuTrack: String
         @MainThread
         get() = playlistManager.player.getSpuTrack()
@@ -1874,6 +1876,7 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
 
     @MainThread
     fun hasRenderer() = playlistManager.player.hasRenderer
+    val supportsCastSubtitles get() = playlistManager.player.supportsCastSubtitles
 
     @MainThread
     fun setRenderer(item: RendererItem?) {

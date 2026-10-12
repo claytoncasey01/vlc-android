@@ -283,7 +283,7 @@ if [ "$FORCE_VLC_4" = 1 ]; then
     LIBVLCJNI_TESTED_HASH=a8d53a9151d7e4a9a5dfd0a5eb1cd92669afdc21
     LIBVLCJNI_BRANCH="master"
 else
-    LIBVLCJNI_TESTED_HASH=0b8dc65efb203c86a0476bc337ddd99ecf1c0ef6
+    LIBVLCJNI_TESTED_HASH=7cd0c151da4162aa3052fb6949ddab1436d8fafb
     LIBVLCJNI_BRANCH="libvlcjni-3.x"
 fi
 LIBVLCJNI_REPOSITORY=https://code.videolan.org/videolan/libvlcjni.git
@@ -357,6 +357,10 @@ if [ -z "$VLC_SRC_DIR" ]; then
     fi
 
     (cd ${VLC_LIBJNI_PATH} && ./buildsystem/get-vlc.sh ${get_vlc_args})
+fi
+
+if [ "$FORCE_VLC_4" != 1 ]; then
+    buildsystem/apply-cast-subtitle-patches.sh "$VLC_LIBJNI_PATH" "${VLC_SRC_DIR:-$VLC_LIBJNI_PATH/vlc}"
 fi
 
 # Always clone VLC when using --init since we'll need to package some files

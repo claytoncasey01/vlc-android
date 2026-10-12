@@ -1,0 +1,572 @@
+diff --git a/include/vlc/libvlc_media_player.h b/include/vlc/libvlc_media_player.h
+index f8e78f49..62638485 100644
+--- a/include/vlc/libvlc_media_player.h
++++ b/include/vlc/libvlc_media_player.h
+@@ -292,6 +292,19 @@ LIBVLC_API void libvlc_media_player_stop ( libvlc_media_player_t *p_mi );
+ LIBVLC_API int libvlc_media_player_set_renderer( libvlc_media_player_t *p_mi,
+                                                  libvlc_renderer_item_t *p_item );
+ 
++/**
++ * Set a complete UTF-8 WebVTT document for a Chromecast text track.
++ * Pass NULL to disable subtitles. The document uses original media timestamps;
++ * the Chromecast output rebases them for each cast stream. Changing a track
++ * during playback reloads the cast stream at the current media position and
++ * requires seekable media. The document is cleared when changing media.
++ *
++ * This is an experimental VLC Android extension.
++ * \return 0 on success, -1 on invalid input or unsupported media.
++ */
++LIBVLC_API int libvlc_media_player_set_cast_subtitle(libvlc_media_player_t *,
++                                                    const char *webvtt);
++
+ /**
+  * Callback prototype to allocate and lock a picture buffer.
+  *
+diff --git a/lib/libvlc.sym b/lib/libvlc.sym
+index 02276b64..1fa2914a 100644
+--- a/lib/libvlc.sym
++++ b/lib/libvlc.sym
+@@ -196,6 +196,7 @@ libvlc_media_player_set_nsobject
+ libvlc_media_player_set_position
+ libvlc_media_player_set_rate
+ libvlc_media_player_set_renderer
++libvlc_media_player_set_cast_subtitle
+ libvlc_media_player_set_role
+ libvlc_media_player_set_time
+ libvlc_media_player_set_title
+diff --git a/lib/media_player.c b/lib/media_player.c
+index 0fd04c5c..e7bb334c 100644
+--- a/lib/media_player.c
++++ b/lib/media_player.c
+@@ -638,6 +638,7 @@ libvlc_media_player_new( libvlc_instance_t *instance )
+     var_Create (mp, "rate", VLC_VAR_FLOAT|VLC_VAR_DOINHERIT);
+     var_Create (mp, "sout", VLC_VAR_STRING);
+     var_Create (mp, "demux-filter", VLC_VAR_STRING);
++    var_Create (mp, "cast-subtitle-webvtt", VLC_VAR_STRING);
+     var_Create (mp, "input-record-path", VLC_VAR_STRING);
+ 
+     /* Video */
+@@ -904,6 +905,7 @@ void libvlc_media_player_set_media(
+     release_input_thread( p_mi );
+ 
+     lock( p_mi );
++    var_SetString(p_mi, "cast-subtitle-webvtt", "");
+     set_state( p_mi, libvlc_NothingSpecial, true );
+     unlock_input( p_mi );
+ 
+@@ -1099,6 +1101,40 @@ void libvlc_media_player_stop( libvlc_media_player_t *p_mi )
+     unlock_input(p_mi);
+ }
+ 
++int libvlc_media_player_set_cast_subtitle(libvlc_media_player_t *mp,
++                                         const char *webvtt)
++{
++    if (webvtt == NULL) webvtt = "";
++    if (strlen(webvtt) > 4 * 1024 * 1024
++     || (*webvtt && strncmp(webvtt, "WEBVTT\n\n", 8)))
++    {
++        libvlc_printerr("Invalid cast subtitle document");
++        return -1;
++    }
++    lock_input(mp);
++    input_thread_t *input = mp->input.p_thread;
++    if (input && mp->input.p_renderer && !var_GetBool(input, "can-seek"))
++    {
++        unlock_input(mp);
++        libvlc_printerr("Changing cast subtitles requires a seekable media");
++        return -1;
++    }
++    char *previous = var_GetString(mp, "cast-subtitle-webvtt");
++    const bool changed = previous == NULL || strcmp(previous, webvtt) != 0;
++    free(previous);
++    int result = changed ? var_SetString(mp, "cast-subtitle-webvtt", webvtt) : VLC_SUCCESS;
++    if (result == VLC_SUCCESS && changed && input && mp->input.p_renderer)
++    {
++        /* Cast cannot add a new side-loaded track through EDIT_TRACKS_INFO.
++         * Restart at the current media time so LOAD includes a fresh track URL.
++         * The normal demux/sout flush also resets the subtitle time origin. */
++        vlc_tick_t time = var_GetInteger(input, "time");
++        result = var_SetInteger(input, "time", time);
++    }
++    unlock_input(mp);
++    return result == VLC_SUCCESS ? 0 : -1;
++}
++
+ int libvlc_media_player_set_renderer( libvlc_media_player_t *p_mi,
+                                       libvlc_renderer_item_t *p_litem )
+ {
+diff --git a/modules/stream_out/Makefile.am b/modules/stream_out/Makefile.am
+index 4cb31520..fe5cac3e 100644
+--- a/modules/stream_out/Makefile.am
++++ b/modules/stream_out/Makefile.am
+@@ -84,6 +84,7 @@ libstream_out_chromecast_plugin_la_SOURCES = stream_out/chromecast/cast.cpp stre
+                                              stream_out/chromecast/cast_channel.proto \
+                                              stream_out/chromecast/chromecast_common.h stream_out/chromecast/chromecast_ctrl.cpp \
+                                              misc/webservices/json.h misc/webservices/json.c stream_out/chromecast/chromecast_communication.cpp
++libstream_out_chromecast_plugin_la_SOURCES += stream_out/chromecast/chromecast_subtitles.hpp
+ nodist_libstream_out_chromecast_plugin_la_SOURCES = stream_out/chromecast/@PROTOBUF_VERSION@/cast_channel.pb.cc
+ libstream_out_chromecast_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) -Istream_out/chromecast/@PROTOBUF_VERSION@ $(CHROMECAST_CFLAGS)
+ libstream_out_chromecast_plugin_la_LIBADD = $(CHROMECAST_LIBS) $(SOCKET_LIBS)
+diff --git a/modules/stream_out/chromecast/chromecast.h b/modules/stream_out/chromecast/chromecast.h
+index 1fbb5ec9..7e4dd4dc 100644
+--- a/modules/stream_out/chromecast/chromecast.h
++++ b/modules/stream_out/chromecast/chromecast.h
+@@ -38,6 +38,7 @@
+ #include <atomic>
+ #include <sstream>
+ #include <queue>
++#include <memory>
+ 
+ #ifndef PROTOBUF_INLINE_NOT_IN_HEADERS
+ # define PROTOBUF_INLINE_NOT_IN_HEADERS 0
+@@ -120,7 +121,8 @@ public:
+     unsigned msgReceiverClose(const std::string& destinationId);
+     unsigned msgAuth();
+     unsigned msgPlayerLoad( const std::string& destinationId,
+-                            const std::string& mime, const vlc_meta_t *p_meta );
++                            const std::string& mime, const vlc_meta_t *p_meta,
++                            const std::string& subtitle_url );
+     unsigned msgPlayerPlay( const std::string& destinationId, int64_t mediaSessionId );
+     unsigned msgPlayerStop( const std::string& destinationId, int64_t mediaSessionId );
+     unsigned msgPlayerPause( const std::string& destinationId, int64_t mediaSessionId );
+@@ -173,6 +175,7 @@ struct intf_sys_t
+ 
+     void setRetryOnFail(bool);
+     void setHasInput(const std::string mime_type = "");
++    void setStreamOrigin(vlc_tick_t media_time);
+ 
+     void setOnInputEventCb(on_input_event_itf on_input_event, void *on_input_event_data);
+     void setDemuxEnabled(bool enabled, on_paused_changed_itf on_paused_changed,
+@@ -238,6 +241,7 @@ private:
+     static void set_meta(void*, vlc_meta_t *p_meta);
+ 
+     void prepareHttpArtwork();
++    void prepareHttpSubtitles();
+ 
+     static vlc_tick_t   timeCCToVLC(double);
+     static std::string  timeVLCToCC(vlc_tick_t);
+@@ -295,6 +299,11 @@ private:
+     char             *m_art_url;
+     unsigned          m_art_idx;
+ 
++    struct subtitle_resource;
++    std::unique_ptr<subtitle_resource> m_subtitle_resource;
++    vlc_tick_t m_stream_origin;
++    unsigned m_subtitle_revision;
++
+     vlc_tick_t        m_cc_time_last_request_date;
+     vlc_tick_t        m_cc_time_date;
+     vlc_tick_t        m_cc_time;
+diff --git a/modules/stream_out/chromecast/chromecast_common.h b/modules/stream_out/chromecast/chromecast_common.h
+index 35abdd00..172830f9 100644
+--- a/modules/stream_out/chromecast/chromecast_common.h
++++ b/modules/stream_out/chromecast/chromecast_common.h
+@@ -32,6 +32,7 @@ extern "C" {
+ # endif
+ 
+ #define CC_SHARED_VAR_NAME "cc_sout"
++#define CC_SUBTITLE_VAR_NAME "cast-subtitle-webvtt"
+ 
+ #define CC_PACE_ERR        (-2)
+ #define CC_PACE_ERR_RETRY  (-1)
+@@ -70,6 +71,8 @@ typedef struct
+ 
+     void (*pf_set_meta)(void*, vlc_meta_t *p_meta);
+ 
++    void (*pf_set_stream_origin)(void*, vlc_tick_t media_time);
++
+ } chromecast_common;
+ 
+ # ifdef __cplusplus
+diff --git a/modules/stream_out/chromecast/chromecast_communication.cpp b/modules/stream_out/chromecast/chromecast_communication.cpp
+index 81336a60..069696f5 100644
+--- a/modules/stream_out/chromecast/chromecast_communication.cpp
++++ b/modules/stream_out/chromecast/chromecast_communication.cpp
+@@ -28,6 +28,7 @@
+ #endif
+ 
+ #include "chromecast.h"
++#include "chromecast_subtitles.hpp"
+ #ifdef HAVE_POLL
+ # include <poll.h>
+ #endif
+@@ -357,13 +358,19 @@ std::string ChromecastCommunication::GetMedia( const std::string& mime,
+ }
+ 
+ unsigned ChromecastCommunication::msgPlayerLoad( const std::string& destinationId,
+-                                             const std::string& mime, const vlc_meta_t *p_meta )
++                                             const std::string& mime, const vlc_meta_t *p_meta,
++                                             const std::string& subtitle_url )
+ {
+     unsigned id = getNextRequestId();
+     std::stringstream ss;
+     ss << "{\"type\":\"LOAD\","
+-       <<  "\"media\":{" << GetMedia( mime, p_meta ) << "},"
+-       <<  "\"autoplay\":\"false\","
++       <<  "\"media\":{" << GetMedia( mime, p_meta );
++    if (!subtitle_url.empty())
++        ss << ',' << cast_subtitles::track(subtitle_url);
++    ss << "},";
++    if (!subtitle_url.empty())
++        ss << "\"activeTrackIds\":[1],";
++    ss <<  "\"autoplay\":\"false\","
+        <<  "\"requestId\":" << id
+        << "}";
+ 
+diff --git a/modules/stream_out/chromecast/chromecast_ctrl.cpp b/modules/stream_out/chromecast/chromecast_ctrl.cpp
+index a552631d..4b015838 100644
+--- a/modules/stream_out/chromecast/chromecast_ctrl.cpp
++++ b/modules/stream_out/chromecast/chromecast_ctrl.cpp
+@@ -32,6 +32,57 @@
+ #endif
+ 
+ #include "chromecast.h"
++#include "chromecast_subtitles.hpp"
++
++struct intf_sys_t::subtitle_resource
++{
++    const std::string path;
++    const std::string document;
++    httpd_url_t *url;
++
++    subtitle_resource(httpd_host_t *host, std::string resource_path, std::string text)
++        : path(std::move(resource_path)), document(std::move(text)),
++          url(httpd_UrlNew(host, path.c_str(), NULL, NULL))
++    {
++        if (!url) throw std::runtime_error("Cannot create cast subtitle URL");
++        httpd_UrlCatch(url, HTTPD_MSG_GET, serve, reinterpret_cast<httpd_callback_sys_t *>(this));
++        httpd_UrlCatch(url, HTTPD_MSG_HEAD, serve, reinterpret_cast<httpd_callback_sys_t *>(this));
++        httpd_UrlCatch(url, HTTPD_MSG_OPTIONS, serve, reinterpret_cast<httpd_callback_sys_t *>(this));
++    }
++
++    ~subtitle_resource() { httpd_UrlDelete(url); }
++
++    static int serve(httpd_callback_sys_t *opaque, httpd_client_t *,
++                     httpd_message_t *answer, const httpd_message_t *query)
++    {
++        const subtitle_resource &resource = *reinterpret_cast<subtitle_resource *>(opaque);
++        answer->i_proto = HTTPD_PROTO_HTTP;
++        answer->i_version = 1;
++        answer->i_type = HTTPD_MSG_ANSWER;
++        answer->i_status = query->i_type == HTTPD_MSG_OPTIONS ? 204 : 200;
++        httpd_MsgAdd(answer, "Content-Type", "text/vtt; charset=utf-8");
++        httpd_MsgAdd(answer, "Access-Control-Allow-Origin", "*");
++        httpd_MsgAdd(answer, "Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
++        httpd_MsgAdd(answer, "Access-Control-Allow-Headers", "Range");
++        httpd_MsgAdd(answer, "Cache-Control", "no-store");
++        httpd_MsgAdd(answer, "Connection", "close");
++        const size_t length = query->i_type == HTTPD_MSG_OPTIONS ? 0 : resource.document.size();
++        if (query->i_type == HTTPD_MSG_GET && length != 0)
++        {
++            answer->p_body = static_cast<uint8_t *>(malloc(length));
++            if (!answer->p_body)
++            {
++                answer->i_status = 500;
++                httpd_MsgAdd(answer, "Content-Length", "0");
++                return VLC_SUCCESS;
++            }
++            memcpy(answer->p_body, resource.document.data(), length);
++            answer->i_body = length;
++        }
++        httpd_MsgAdd(answer, "Content-Length", "%zu", length);
++        return VLC_SUCCESS;
++    }
++};
+ 
+ #include <cassert>
+ #include <cerrno>
+@@ -113,6 +164,8 @@ intf_sys_t::intf_sys_t(vlc_object_t * const p_this, int port, std::string device
+  , m_httpd_file(NULL)
+  , m_art_url(NULL)
+  , m_art_idx(0)
++ , m_stream_origin(0)
++ , m_subtitle_revision(0)
+  , m_cc_time_date( VLC_TICK_INVALID )
+  , m_cc_time( VLC_TICK_INVALID )
+  , m_pingRetriesLeft( PING_WAIT_RETRIES )
+@@ -140,6 +193,9 @@ intf_sys_t::intf_sys_t(vlc_object_t * const p_this, int port, std::string device
+     m_common.pf_send_input_event = send_input_event;
+     m_common.pf_set_pause_state  = set_pause_state;
+     m_common.pf_set_meta         = set_meta;
++    m_common.pf_set_stream_origin = [](void *opaque, vlc_tick_t time) {
++        static_cast<intf_sys_t *>(opaque)->setStreamOrigin(time);
++    };
+ 
+     assert( var_Type( m_module->obj.parent->obj.parent, CC_SHARED_VAR_NAME) == 0 );
+     if (var_Create( m_module->obj.parent->obj.parent, CC_SHARED_VAR_NAME, VLC_VAR_ADDRESS ) == VLC_SUCCESS )
+@@ -203,6 +259,7 @@ intf_sys_t::~intf_sys_t()
+         httpd_FileDelete( m_httpd_file );
+ 
+     free( m_art_url );
++    m_subtitle_resource.reset();
+ 
+     vlc_cond_destroy(&m_stateChangedCond);
+     vlc_cond_destroy(&m_pace_cond);
+@@ -343,6 +400,33 @@ void intf_sys_t::prepareHttpArtwork()
+     vlc_meta_Set( m_meta, vlc_meta_ArtworkURL, ss.str().c_str() );
+ }
+ 
++void intf_sys_t::setStreamOrigin(vlc_tick_t media_time)
++{
++    vlc_mutex_locker lock(&m_lock);
++    m_stream_origin = std::max<vlc_tick_t>(media_time, 0);
++}
++
++void intf_sys_t::prepareHttpSubtitles()
++{
++    // Resources are immutable. HTTP callbacks never acquire m_lock, so replacing
++    // an endpoint while holding it cannot deadlock with an in-flight request.
++    m_subtitle_resource.reset();
++    vlc_object_t *owner = m_module->obj.parent->obj.parent;
++    if (!var_Type(owner, CC_SUBTITLE_VAR_NAME)) return;
++    std::unique_ptr<char, decltype(&free)> source(var_GetString(owner, CC_SUBTITLE_VAR_NAME), &free);
++    if (!source || !*source) return;
++    try {
++        std::string document = cast_subtitles::rebase(source.get(),
++                                                     m_stream_origin / 1000);
++        const std::string path = getHttpArtRoot() + "/subtitles-" +
++                                 std::to_string(++m_subtitle_revision) + ".vtt";
++        m_subtitle_resource.reset(new subtitle_resource(m_httpd.m_host, path,
++                                                        std::move(document)));
++    } catch (const std::exception &error) {
++        msg_Err(m_module, "Cannot serve cast subtitles: %s", error.what());
++    }
++}
++
+ void intf_sys_t::tryLoad()
+ {
+     if( !m_request_load )
+@@ -373,7 +457,8 @@ void intf_sys_t::tryLoad()
+     // Reset the mediaSessionID to allow the new session to become the current one.
+     // we cannot start a new load when the last one is still processing
+     m_last_request_id =
+-        m_communication->msgPlayerLoad( m_appTransportId, m_mime, m_meta );
++        m_communication->msgPlayerLoad( m_appTransportId, m_mime, m_meta,
++            m_subtitle_resource ? m_art_http_ip + m_subtitle_resource->path : "" );
+     if( m_last_request_id != ChromecastCommunication::kInvalidId )
+         m_state = Loading;
+ }
+@@ -399,6 +484,7 @@ void intf_sys_t::setHasInput( const std::string mime_type )
+     std::swap(m_msgQueue, empty);
+ 
+     prepareHttpArtwork();
++    prepareHttpSubtitles();
+ 
+     m_request_stop = false;
+     m_played_once = false;
+diff --git a/modules/stream_out/chromecast/chromecast_demux.cpp b/modules/stream_out/chromecast/chromecast_demux.cpp
+index 724ad17b..8b4faad5 100644
+--- a/modules/stream_out/chromecast/chromecast_demux.cpp
++++ b/modules/stream_out/chromecast/chromecast_demux.cpp
+@@ -162,6 +162,8 @@ struct demux_cc
+ 
+         m_last_time = m_start_time;
+         m_last_pos = m_start_pos;
++        p_renderer->pf_set_stream_origin(p_renderer->p_opaque,
++                                         m_start_time >= 0 ? m_start_time : 0);
+     }
+ 
+     ~demux_cc()
+@@ -262,6 +264,13 @@ struct demux_cc
+         int ret = VLC_DEMUXER_SUCCESS;
+         if( !m_demux_eof )
+         {
++            if (m_start_time < 0 || m_start_pos < 0.0f)
++            {
++                char *webvtt = var_InheritString(p_demux, CC_SUBTITLE_VAR_NAME);
++                if (webvtt && *webvtt)
++                    initTimes();
++                free(webvtt);
++            }
+             ret = demux_Demux( p_demux->p_next );
+             if( ret != VLC_DEMUXER_EGENERIC
+              && ( m_start_time < 0 || m_start_pos < 0.0f ) )
+diff --git a/modules/stream_out/chromecast/chromecast_subtitles.hpp b/modules/stream_out/chromecast/chromecast_subtitles.hpp
+new file mode 100644
+index 00000000..d0cf2fd4
+--- /dev/null
++++ b/modules/stream_out/chromecast/chromecast_subtitles.hpp
+@@ -0,0 +1,118 @@
++/*****************************************************************************
++ * chromecast_subtitles.hpp: receiver-rendered external WebVTT subtitles
++ *****************************************************************************
++ * Copyright (C) 2026 VLC authors and VideoLAN
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of the GNU Lesser General Public License as published by
++ * the Free Software Foundation; either version 2.1 of the License, or
++ * (at your option) any later version.
++ * This program is distributed WITHOUT ANY WARRANTY; without even the implied
++ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++ *****************************************************************************/
++#ifndef VLC_CHROMECAST_SUBTITLES_HPP
++#define VLC_CHROMECAST_SUBTITLES_HPP
++
++#include <algorithm>
++#include <cstdint>
++#include <iomanip>
++#include <limits>
++#include <sstream>
++#include <stdexcept>
++#include <string>
++#include <utility>
++#include <vector>
++
++namespace cast_subtitles
++{
++static constexpr size_t max_document_size = 4 * 1024 * 1024;
++
++inline int64_t timestamp(const std::string &text)
++{
++    std::vector<int64_t> parts;
++    int64_t value = 0;
++    unsigned digits = 0;
++    for (char c : text)
++    {
++        if (c >= '0' && c <= '9')
++        {
++            if (value > (std::numeric_limits<int64_t>::max() - (c - '0')) / 10)
++                throw std::invalid_argument("WebVTT timestamp overflow");
++            value = value * 10 + c - '0';
++            ++digits;
++        }
++        else if ((c == ':' && parts.size() < 2 && digits >= 2)
++              || (c == '.' && parts.size() == 2 && digits == 2))
++        {
++            parts.push_back(value);
++            value = 0;
++            digits = 0;
++        }
++        else
++            throw std::invalid_argument("Invalid WebVTT timestamp");
++    }
++    if (parts.size() != 3 || digits != 3 || parts[1] >= 60 || parts[2] >= 60)
++        throw std::invalid_argument("Invalid WebVTT timestamp");
++    int64_t remainder = parts[1] * 60000 + parts[2] * 1000 + value;
++    if (parts[0] > (std::numeric_limits<int64_t>::max() - remainder) / 3600000)
++        throw std::invalid_argument("WebVTT timestamp overflow");
++    return parts[0] * 3600000 + remainder;
++}
++
++inline std::string timestamp(int64_t ms)
++{
++    std::ostringstream out;
++    out << std::setfill('0') << std::setw(2) << ms / 3600000 << ':'
++        << std::setw(2) << ms / 60000 % 60 << ':'
++        << std::setw(2) << ms / 1000 % 60 << '.' << std::setw(3) << ms % 1000;
++    return out.str();
++}
++
++/* The Android bridge supplies canonical WebVTT, already decoded to UTF-8 and
++ * with any user subtitle delay applied. Never offset the stored source in place:
++ * every cast reload/seek gets a new export on the receiver's zero-based clock. */
++inline std::string rebase(const std::string &document, int64_t origin_ms)
++{
++    if (document.size() > max_document_size || document.compare(0, 8, "WEBVTT\n\n") != 0
++     || document.find('\0') != std::string::npos || origin_ms < 0)
++        throw std::invalid_argument("Invalid cast subtitle document");
++    std::istringstream in(document.substr(8));
++    std::ostringstream out;
++    out << "WEBVTT\n\n";
++    std::string line;
++    while (std::getline(in, line))
++    {
++        if (line.empty()) continue;
++        std::istringstream timing(line);
++        std::string start_text, arrow, end_text, settings;
++        if (!(timing >> start_text >> arrow >> end_text) || arrow != "-->")
++            throw std::invalid_argument("Invalid WebVTT cue timing");
++        std::getline(timing, settings);
++        int64_t start = timestamp(start_text), end = timestamp(end_text);
++        if (end <= start) throw std::invalid_argument("Invalid WebVTT cue duration");
++        std::string payload, text;
++        while (std::getline(in, text) && !text.empty())
++        {
++            if (text.find("-->") != std::string::npos)
++                throw std::invalid_argument("Invalid WebVTT cue text");
++            payload += text + '\n';
++        }
++        if (payload.empty()) throw std::invalid_argument("Empty WebVTT cue");
++        if (end <= origin_ms) continue;
++        out << timestamp(std::max<int64_t>(start - origin_ms, 0)) << " --> "
++            << timestamp(end - origin_ms) << settings << '\n' << payload << '\n';
++    }
++    return out.str();
++}
++
++inline std::string track(const std::string &url)
++{
++    // URLs are generated by VLC's HTTP server, never supplied by the caller.
++    if (url.find_first_of("\"\\\r\n") != std::string::npos)
++        throw std::invalid_argument("Invalid subtitle URL");
++    return "\"tracks\":[{\"trackId\":1,\"type\":\"TEXT\",\"subtype\":\"SUBTITLES\","
++           "\"trackContentId\":\"" + url + "\",\"trackContentType\":\"text/vtt\","
++           "\"language\":\"und\",\"name\":\"External subtitles\"}]";
++}
++}
++#endif
+diff --git a/src/network/httpd.c b/src/network/httpd.c
+index 426df084..7f55f309 100644
+--- a/src/network/httpd.c
++++ b/src/network/httpd.c
+@@ -1268,6 +1268,7 @@ msg_type[] =
+     { "GET_PARAMETER", HTTPD_MSG_GETPARAMETER, HTTPD_PROTO_RTSP },
+     { "TEARDOWN",      HTTPD_MSG_TEARDOWN,     HTTPD_PROTO_RTSP },
+     { "GET",           HTTPD_MSG_GET,          HTTPD_PROTO_HTTP },
++    { "OPTIONS",       HTTPD_MSG_OPTIONS,      HTTPD_PROTO_HTTP },
+     { "HEAD",          HTTPD_MSG_HEAD,         HTTPD_PROTO_HTTP },
+     { "POST",          HTTPD_MSG_POST,         HTTPD_PROTO_HTTP },
+     { "",              HTTPD_MSG_NONE,         HTTPD_PROTO_NONE }
+@@ -1415,8 +1416,9 @@ static int httpd_ClientRecv(httpd_client_t *cl)
+                 cl->query.i_type = HTTPD_MSG_NONE;
+ 
+                 for (unsigned i = 0; msg_type[i].name[0]; i++)
+-                    if (!strncmp((char *)cl->p_buffer, msg_type[i].name,
+-                                strlen(msg_type[i].name))) {
++                    if (cl->query.i_proto == msg_type[i].i_proto
++                     && !strncmp((char *)cl->p_buffer, msg_type[i].name,
++                                 strlen(msg_type[i].name))) {
+                         p = (char *)&cl->p_buffer[strlen(msg_type[i].name) + 1 ];
+                         cl->query.i_type = msg_type[i].i_type;
+                         if (cl->query.i_proto != msg_type[i].i_proto) {
+diff --git a/test/Makefile.am b/test/Makefile.am
+index 1b6bd9f3..5abf238a 100644
+--- a/test/Makefile.am
++++ b/test/Makefile.am
+@@ -36,7 +36,9 @@ check_PROGRAMS = \
+ 	test_modules_keystore
+ 
+ if ENABLE_SOUT
+-check_PROGRAMS += test_modules_tls
++check_PROGRAMS += test_modules_tls test_modules_chromecast_subtitles
++test_modules_chromecast_subtitles_SOURCES = modules/stream_out/chromecast_subtitles.cpp
++test_modules_chromecast_subtitles_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/modules/stream_out/chromecast
+ endif
+ if UPDATE_CHECK
+ check_PROGRAMS += test_src_crypto_update
+diff --git a/test/modules/stream_out/chromecast_subtitles.cpp b/test/modules/stream_out/chromecast_subtitles.cpp
+new file mode 100644
+index 00000000..620416d5
+--- /dev/null
++++ b/test/modules/stream_out/chromecast_subtitles.cpp
+@@ -0,0 +1,20 @@
++/* Copyright (C) 2026 VLC authors and VideoLAN. GPL version 2 or later. */
++#undef NDEBUG
++#include "chromecast_subtitles.hpp"
++#include <cassert>
++#include <iostream>
++using namespace cast_subtitles;
++int main() {
++ const std::string document = "WEBVTT\n\n00:00:01.000 --> 00:00:03.000 align:start\n你好 👋\nSecond line\n\n00:00:05.000 --> 00:00:07.250\nLater\n\n";
++ assert(rebase(document,0)==document);
++ assert(rebase(document,2000)=="WEBVTT\n\n00:00:00.000 --> 00:00:01.000 align:start\n你好 👋\nSecond line\n\n00:00:03.000 --> 00:00:05.250\nLater\n\n");
++ assert(rebase(document,3000)=="WEBVTT\n\n00:00:02.000 --> 00:00:04.250\nLater\n\n");
++ assert(rebase(document,8000)=="WEBVTT\n\n");
++ for (const std::string value : {"00:60:00.000","00:00:60.000","00:01.000","999999999999999999999:00:00.000","00:00:00,000"}) {
++  bool failed=false;try{timestamp(value);}catch(const std::invalid_argument&){failed=true;}assert(failed);
++ }
++ assert(timestamp("25:00:01.250")==90001250);
++ assert(timestamp(90001250)=="25:00:01.250");
++ std::cout << track("http://192.0.2.1:8010/session/subtitles-1.vtt") << std::endl;
++ std::cout << "Native WebVTT conversion checks passed\n";
++}

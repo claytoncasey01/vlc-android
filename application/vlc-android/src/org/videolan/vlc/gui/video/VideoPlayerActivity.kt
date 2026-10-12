@@ -1192,11 +1192,12 @@ open class VideoPlayerActivity : AppCompatActivity(), PlaybackService.Callback, 
 
         if (data.hasExtra(EXTRA_MRL)) {
             val subtitleUri = data.getStringExtra(EXTRA_MRL)!!.toUri()
-            service?.addSubtitleTrack(getUri(subtitleUri) ?: subtitleUri, false)
+            service?.addSubtitleTrack(if (service?.supportsCastSubtitles == true) subtitleUri else getUri(subtitleUri) ?: subtitleUri,
+                    service?.supportsCastSubtitles == true)
             service?.currentMediaWrapper?.let {
                 SlaveRepository.getInstance(this).saveSlave(it.location, IMedia.Slave.Type.Subtitle, 2, data.getStringExtra(EXTRA_MRL)!!)
             }
-            addNextTrack = true
+            addNextTrack = service?.supportsCastSubtitles != true
         } else if (BuildConfig.DEBUG) Log.d(TAG, "Subtitle selection dialog was cancelled")
     }
 

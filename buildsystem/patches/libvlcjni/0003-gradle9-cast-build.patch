@@ -1,0 +1,21 @@
+diff --git a/libvlc/build.gradle b/libvlc/build.gradle
+index 384451b..d3eb53a 100644
+--- a/libvlc/build.gradle
++++ b/libvlc/build.gradle
+@@ -53,7 +53,7 @@ android {
+     buildTypes {
+         release {
+             minifyEnabled false
+-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.txt'
++            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.txt'
+         }
+         dev {
+             initWith debug
+@@ -95,6 +95,7 @@ android {
+     }
+     buildFeatures {
+         buildConfig = true
++        resValues = true
+     }
+ }
+ 

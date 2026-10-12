@@ -101,4 +101,8 @@ fun getDisableTrack(context: Context) : VlcTrack {
  * Scan the system fonts and build the fontconfig cache. VLC3 builds fontconfig for Android, so
  * this actually does the scan. See [org.videolan.vlc.util.FontCache].
  */
-fun LibVLC.buildFontCacheIfSupported(): Boolean = buildFontCache()
+fun LibVLC.buildFontCacheIfSupported(): Boolean = try {
+    LibVLC::class.java.getMethod("buildFontCache").invoke(this) == true
+} catch (_: NoSuchMethodException) {
+    false
+}
