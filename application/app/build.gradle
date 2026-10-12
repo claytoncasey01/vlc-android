@@ -21,6 +21,10 @@ android {
 
     packaging {
         resources.excludes.add("META-INF/versions/9/OSGI-INF/MANIFEST.MF")
+        if (rootProject.hasProperty('castSubtitleLibVlc') && rootProject.getProperty('castSubtitleLibVlc').toBoolean()) {
+            // Keep native libraries directly loadable, but reduce the download size.
+            dex { useLegacyPackaging true }
+        }
     }
 
     dataBinding {
