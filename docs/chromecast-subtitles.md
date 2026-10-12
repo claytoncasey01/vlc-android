@@ -8,6 +8,12 @@ with rebased cue times when the cast stream reloads after a seek. Selecting,
 disabling, or changing the subtitle delay reloads the stream at the current media
 position. Text subtitles do not themselves require video transcoding.
 
+Matroska casting uses the avformat reader to retain decode timestamps for
+reordered HEVC/H.264 frames. The older MKV reader's estimated DTS can move
+backwards, causing modern libavformat to drop frames during remuxing. Initial
+missing DTS are derived from the parsed codec delay, reset after seeking, and
+clipped to VLC 3's time zero without shifting presentation times.
+
 ## Trying the build
 
 The initial target is an arm64 Pixel casting directly from VLC to a Chromecast
@@ -47,3 +53,9 @@ Ordinary builds using the published engine retain the casting subtitle restricti
 The native timestamp/track tests are part of VLC's test sources. The Android
 document tests are in the existing JUnit source set and can also be run with
 `buildsystem/check-cast-subtitles.sh` without an Android SDK.
+
+The remux regression harness is `buildsystem/tests/cast-remux-regression.c`.
+Build it with libavformat/libavcodec/libavutil development libraries and the
+patched `modules/demux/avformat` include directory. Run it with a reordered HEVC
+Matroska input and an output path; append `legacy` to reproduce frame rejection
+or `seek` to check restarting after a seek. FFmpeg 8.1.2 was used for validation.

@@ -1,0 +1,176 @@
+diff --git a/modules/demux/Makefile.am b/modules/demux/Makefile.am
+index dbb6a101..30221ad8 100644
+--- a/modules/demux/Makefile.am
++++ b/modules/demux/Makefile.am
+@@ -146,7 +146,8 @@ demux_LTLIBRARIES += libcaf_plugin.la
+ 
+ libavformat_plugin_la_SOURCES = demux/avformat/demux.c \
+ 	demux/vobsub.h \
+-	demux/avformat/avformat.c demux/avformat/avformat.h
++	demux/avformat/avformat.c demux/avformat/avformat.h \
++	demux/avformat/matroska_dts.h
+ if ENABLE_SOUT
+ libavformat_plugin_la_SOURCES += demux/avformat/mux.c
+ endif
+diff --git a/modules/demux/avformat/demux.c b/modules/demux/avformat/demux.c
+index 4c04f799..bcaa621b 100644
+--- a/modules/demux/avformat/demux.c
++++ b/modules/demux/avformat/demux.c
+@@ -42,6 +42,7 @@
+ #include "../../codec/avcodec/chroma.h"
+ #include "../../codec/avcodec/avcommon_compat.h"
+ #include "avformat.h"
++#include "matroska_dts.h"
+ #include "../xiph.h"
+ #include "../vobsub.h"
+ 
+@@ -62,6 +63,7 @@ struct avformat_track_s
+ {
+     es_out_id_t *p_es;
+     vlc_tick_t i_pcr;
++    int64_t i_last_dts; /* Unclamped libavformat decode time, in stream ticks. */
+ };
+ 
+ /*****************************************************************************
+@@ -426,6 +428,7 @@ int avformat_OpenDemux( vlc_object_t *p_this )
+     for( unsigned i = 0; i < nb_streams; i++ )
+     {
+         struct avformat_track_s *p_track = &p_sys->tracks[i];
++        p_track->i_last_dts = AV_NOPTS_VALUE;
+         AVStream *s = p_sys->ic->streams[i];
+         const AVCodecParameters *cp = s->codecpar;
+         es_format_t es_fmt;
+@@ -870,15 +873,31 @@ static int Demux( demux_t *p_demux )
+     else
+         i_start_time = 0;
+ 
+-    if( pkt.dts == (int64_t)AV_NOPTS_VALUE )
++    const bool matroska_video = !strncmp( p_sys->fmt->name, "matroska", 8 )
++        && (p_stream->codecpar->codec_id == AV_CODEC_ID_HEVC
++         || p_stream->codecpar->codec_id == AV_CODEC_ID_H264);
++    int64_t dts = pkt.dts;
++    if( matroska_video )
++    {
++        dts = vlc_matroska_initial_dts( pkt.pts, dts, p_track->i_last_dts,
++                                      pkt.duration, p_stream->codecpar->video_delay );
++        p_track->i_last_dts = dts;
++    }
++
++    if( dts == (int64_t)AV_NOPTS_VALUE )
+         p_frame->i_dts = VLC_TICK_INVALID;
+     else
+     {
+-        q = lldiv( pkt.dts, p_stream->time_base.den );
++        q = lldiv( dts, p_stream->time_base.den );
+         p_frame->i_dts = q.quot * CLOCK_FREQ *
+             p_stream->time_base.num + q.rem * CLOCK_FREQ *
+             p_stream->time_base.num /
+             p_stream->time_base.den - i_start_time + VLC_TICK_0;
++        /* VLC 3 reserves zero for an absent timestamp. Matroska permits equal
++         * DTS, so keep leading reordered pictures at time zero without moving
++         * their presentation times. Retain the raw DTS above for the next AU. */
++        if( matroska_video )
++            p_frame->i_dts = __MAX( p_frame->i_dts, VLC_TICK_0 );
+     }
+ 
+     if( pkt.pts == (int64_t)AV_NOPTS_VALUE )
+@@ -987,7 +1006,10 @@ static void ResetTime( demux_t *p_demux, int64_t i_time )
+ 
+     p_sys->i_pcr = i_time;
+     for( unsigned i = 0; i < p_sys->i_tracks; i++ )
++    {
+         p_sys->tracks[i].i_pcr = VLC_TICK_INVALID;
++        p_sys->tracks[i].i_last_dts = AV_NOPTS_VALUE;
++    }
+ 
+     if( i_time > VLC_TICK_INVALID )
+     {
+diff --git a/modules/demux/avformat/matroska_dts.h b/modules/demux/avformat/matroska_dts.h
+new file mode 100644
+index 00000000..7c2c8849
+--- /dev/null
++++ b/modules/demux/avformat/matroska_dts.h
+@@ -0,0 +1,31 @@
++/*****************************************************************************
++ * matroska_dts.h: initial decode timestamps for reordered Matroska video
++ *****************************************************************************
++ * Copyright (C) 2026 VLC authors and VideoLAN
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of the GNU Lesser General Public License as published by
++ * the Free Software Foundation; either version 2.1, or any later version.
++ *****************************************************************************/
++
++#ifndef VLC_AVFORMAT_MATROSKA_DTS_H
++#define VLC_AVFORMAT_MATROSKA_DTS_H
++#include <stdint.h>
++
++/* libavformat can leave the first reordered packets without a DTS. Seed those
++ * from the codec's parsed reorder delay, then use the previous decode time.
++ * Never replace decode timestamps that the demuxer has already supplied. */
++static inline int64_t vlc_matroska_initial_dts(int64_t pts, int64_t dts,
++                                              int64_t previous, int64_t duration,
++                                              int reorder)
++{
++    if (dts != INT64_MIN || pts == INT64_MIN || duration <= 0
++     || reorder <= 0 || reorder > 16)
++        return dts;
++    if (previous != INT64_MIN)
++        return previous <= INT64_MAX - duration ? previous + duration : dts;
++    if (duration > INT64_MAX / reorder)
++        return dts;
++    const int64_t offset = duration * reorder;
++    return pts > INT64_MIN + offset ? pts - offset : dts;
++}
++#endif
+diff --git a/modules/demux/avformat/mux.c b/modules/demux/avformat/mux.c
+index d8be5d1d..0a3873f3 100644
+--- a/modules/demux/avformat/mux.c
++++ b/modules/demux/avformat/mux.c
+@@ -400,11 +400,14 @@ static int MuxBlock( sout_mux_t *p_mux, sout_input_t *p_input )
+             CLOCK_FREQ / p_stream->time_base.num ) - 1;
+ #endif
+ 
+-    if( av_write_frame( p_sys->oc, pkt ) < 0 )
++    int error = av_write_frame( p_sys->oc, pkt );
++    if( error < 0 )
+     {
+-        msg_Err( p_mux, "could not write frame (pts: %"PRId64", dts: %"PRId64") "
++        char reason[AV_ERROR_MAX_STRING_SIZE];
++        av_strerror( error, reason, sizeof( reason ) );
++        msg_Err( p_mux, "could not write frame: %s (stream: %d, pts: %"PRId64", dts: %"PRId64") "
+                  "(pkt pts: %"PRId64", dts: %"PRId64")",
+-                 p_data->i_pts, p_data->i_dts, pkt->pts, pkt->dts );
++                 reason, i_stream, p_data->i_pts, p_data->i_dts, pkt->pts, pkt->dts );
+         block_Release( p_data );
+         av_packet_free( &pkt );
+         return VLC_EGENERIC;
+diff --git a/src/input/input.c b/src/input/input.c
+index 1de75e87..383da915 100644
+--- a/src/input/input.c
++++ b/src/input/input.c
+@@ -2635,6 +2635,25 @@ static demux_t *InputDemuxNew( input_thread_t *p_input, input_source_t *p_source
+     if( var_InheritBool( p_source, "input-record-native" ) )
+         p_stream = stream_FilterChainNew( p_stream, "record" );
+ 
++    /* Matroska stores presentation times, not decode times. The native MKV
++     * demuxer's estimates can go backwards for reordered HEVC frames. Modern
++     * libavformat rejects those packets when Chromecast remuxes them. Use its
++     * demuxer as well, so codec parsing supplies the decode timestamps. Keep
++     * explicit demux choices, preparsing, and local playback unchanged. */
++    if( !priv->b_preparsing && priv->p_renderer
++     && !strcmp( vlc_renderer_item_type( priv->p_renderer ), "chromecast" )
++     && (!psz_demux[0] || !strcmp( psz_demux, "any" ))
++     && module_exists( "avformat" ) )
++    {
++        const uint8_t *header;
++        if( vlc_stream_Peek( p_stream, &header, 4 ) == 4
++         && !memcmp( header, "\x1a\x45\xdf\xa3", 4 ) )
++        {
++            msg_Dbg( p_input, "Using avformat for Chromecast Matroska decode timestamps" );
++            psz_demux = "avformat";
++        }
++    }
++
+     /* create a regular demux with the access stream created */
+     p_demux = demux_NewAdvanced( VLC_OBJECT( p_source ), p_input,
+                                  psz_access, psz_demux, psz_path,

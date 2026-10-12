@@ -20,5 +20,7 @@ apply_cast_patch() {
     git -C "$cast_source" apply "$cast_patch"
 }
 
-apply_cast_patch "$2" "$cast_patch_root/vlc/0001-chromecast-external-webvtt.patch"
+for cast_patch in "$cast_patch_root"/vlc/*.patch; do
+    apply_cast_patch "$2" "$cast_patch"
+done
 apply_cast_patch "$1" "$cast_patch_root/libvlcjni/0001-chromecast-subtitle-bridge.patch"
