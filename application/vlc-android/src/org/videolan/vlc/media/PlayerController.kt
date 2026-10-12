@@ -404,7 +404,7 @@ class PlayerController(val context: Context) : IVLCVout.Callback, MediaPlayer.Ev
     private fun newMediaPlayer() : MediaPlayer {
         return MediaPlayer(VLCInstance.getInstance(context)).apply {
             if (BuildConfig.DEBUG && CastSubtitleBridge.isSupported)
-                android.util.Log.i("VLC", "Cast alpha5: embedded text subtitles / VLC Android 3.7.1 / FFmpeg 4.4.5")
+                android.util.Log.i("VLC", "Cast alpha6: upstream master / LibVLC 3.7.0 / FFmpeg 4.4.5")
             setAudioDigitalOutputEnabled(VLCOptions.isAudioDigitalOutputEnabled(settings))
             VLCOptions.getAout(settings)?.let { setAudioOutput(it) }
             setRenderer(PlaybackService.renderer.value)
